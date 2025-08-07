@@ -2,7 +2,6 @@
 
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Trash2 } from "lucide-react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,66 +13,80 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import { Trash2 } from "lucide-react"
+import { useToast } from "@/components/ui/use-toast"
+import { deleteOrderAction } from "./actions"
 
+// Update the interface to include onSuccess callback
 interface DeleteOrderButtonProps {
   orderId: string
+  orderNumber: string
   onSuccess?: () => void
 }
 
-export function DeleteOrderButton({ orderId, onSuccess }: DeleteOrderButtonProps) {
-  const [isDeleting, setIsDeleting] = useState(false)
+export function DeleteOrderButton({ orderId, orderNumber, onSuccess }: DeleteOrderButtonProps) {
+  const [open, setOpen] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const { toast } = useToast()
 
   const handleDelete = async () => {
+    setIsLoading(true)
+
+    const formData = new FormData()
+    formData.append("orderId", orderId)
+
     try {
-      setIsDeleting(true)
+      const result = await deleteOrderAction(formData)
 
-      const response = await fetch(`/api/admin/orders/delete`, {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ orderId }),
-      })
-
-      if (!response.ok) {
-        const error = await response.text()
-        throw new Error(error)
+      if (result.success) {
+        toast({
+          title: "הצלחה",
+          description: "ההזמנה נמחקה בהצלחה",
+        })
+        setOpen(false)
+        onSuccess?.()
+      } else {
+        toast({
+          title: "שגיאה",
+          description: result.error || "שגיאה במחיקת ההזמנה",
+          variant: "destructive",
+        })
       }
-
-      alert("ההזמנה נמחקה בהצלחה")
-
-      if (onSuccess && typeof onSuccess === "function") {
-        onSuccess()
-      }
-
-      // Refresh the page
-      window.location.reload()
     } catch (error) {
       console.error("Error deleting order:", error)
-      alert("שגיאה במחיקת ההזמנה")
-    } finally {
-      setIsDeleting(false)
+      toast({
+        title: "שגיאה",
+        description: "שגיאה במחיקת ההזמנה",
+        variant: "destructive",
+      })
     }
+
+    setIsLoading(false)
   }
 
   return (
-    <AlertDialog>
+    <AlertDialog open={open} onOpenChange={setOpen}>
       <AlertDialogTrigger asChild>
-        <Button variant="destructive" size="sm" disabled={isDeleting}>
+        <Button variant="outline" size="sm">
           <Trash2 className="h-4 w-4" />
         </Button>
       </AlertDialogTrigger>
-      <AlertDialogContent>
+      <AlertDialogContent aria-describedby="delete-order-description">
         <AlertDialogHeader>
-          <AlertDialogTitle>מחיקת הזמנה</AlertDialogTitle>
-          <AlertDialogDescription>
-            האם אתה בטוח שברצונך למחוק את ההזמנה? פעולה זו לא ניתנת לביטול.
+          <AlertDialogTitle>האם אתה בטוח?</AlertDialogTitle>
+          <AlertDialogDescription id="delete-order-description">
+            פעולה זו תמחק את הזמנה #{orderNumber} לצמיתות ולא ניתן לבטל אותה. כל פרטי ההזמנה והפריטים שלה יימחקו
+            מהמערכת.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>ביטול</AlertDialogCancel>
-          <AlertDialogAction onClick={handleDelete} disabled={isDeleting}>
-            {isDeleting ? "מוחק..." : "מחק"}
+          <AlertDialogAction
+            onClick={handleDelete}
+            disabled={isLoading}
+            className="bg-destructive hover:bg-destructive/90"
+          >
+            {isLoading ? "מוחק..." : "מחק"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

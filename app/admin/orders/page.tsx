@@ -1,297 +1,269 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { useEffect, useState } from "react"
+import { useSupabase } from "@/hooks/use-supabase"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { LoadingSpinner } from "@/components/ui/loading-spinner"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Input } from "@/components/ui/input"
-import { Search, Download, Eye, AlertCircle } from 'lucide-react'
-import Link from "next/link"
-import { DeleteOrderButton } from "./delete-order-button"
-import { CancelOrderButton } from "./cancel-order-button"
+import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { ConfirmOrderButton } from "./confirm-order-button"
 import { RejectOrderButton } from "./reject-order-button"
-import { EditOrderDialog } from "./edit-order-dialog"
-import * as XLSX from "xlsx"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-
-interface Product {
-  id: string
-  name: string
-  price: number
-  image_url?: string
-  stock: number
-  collection: string
-}
-
-interface OrderItem {
-  id: string
-  quantity: number
-  price_per_item: number
-  products: Product
-}
+import { DeleteOrderButton } from "./delete-order-button"
+import { BulkDeleteButton } from "./bulk-delete-button"
+import { AdminNotifications } from "@/components/admin-notifications"
+import Link from "next/link"
+import { useRouter, useSearchParams } from "next/navigation"
+import { useToast } from "@/components/ui/use-toast"
+import { Settings } from "lucide-react"
 
 interface Order {
   id: string
-  customer_name: string
-  phone: string
-  delivery_option: "self_pickup" | "israel_post"
-  payment_method: "bit" | "paypal" | "paybox"
-  city?: string
-  street?: string
-  house_number?: string
-  zip_code?: string
-  total_price: number
-  status: "pending" | "confirmed" | "rejected" | "cancelled"
   created_at: string
-  order_items: OrderItem[]
-}
-
-const statusColors: { [key: string]: string } = {
-  pending: "bg-yellow-100 text-yellow-800 border-yellow-200",
-  confirmed: "bg-green-100 text-green-800 border-green-200",
-  rejected: "bg-red-100 text-red-800 border-red-200",
-  cancelled: "bg-gray-100 text-gray-800 border-gray-200",
-}
-
-const statusLabels: { [key: string]: string } = {
-  pending: "ממתין",
-  confirmed: "מאושר",
-  rejected: "נדחה",
-  cancelled: "בוטל",
+  customer_name: string
+  delivery_option: string
+  total_price: number
+  status: string
+  order_items: Array<{
+    quantity: number
+    products: {
+      name: string
+      price: number
+    }
+  }>
 }
 
 export default function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([])
-  const [filteredOrders, setFilteredOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [statusFilter, setStatusFilter] = useState<string>("all")
-  const [searchTerm, setSearchTerm] = useState("")
+  const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set())
+  const [selectAll, setSelectAll] = useState(false)
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const { toast } = useToast()
+  const supabase = useSupabase() // Moved useSupabase hook to the top level
 
-  const fetchOrders = useCallback(async () => {
-    try {
-      setLoading(true)
-      setError(null)
+  const loadOrders = async () => {
+    setLoading(true)
+    const { data, error } = await supabase
+      .from("orders")
+      .select(`
+        *,
+        order_items (
+          quantity,
+          products (
+            name,
+            price
+          )
+        )
+      `)
+      .order("created_at", { ascending: false })
 
-      const response = await fetch("/api/admin/orders")
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || "Failed to fetch orders")
-      }
-
-      const data = await response.json()
-      setOrders(data)
-    } catch (err) {
-      console.error("❌ Failed to fetch orders:", err)
-      const errorMessage = err instanceof Error ? err.message : "An unknown error occurred"
-      setError(`שגיאה בטעינת ההזמנות: ${errorMessage}`)
-    } finally {
-      setLoading(false)
+    if (error) {
+      console.error("Error loading orders:", error)
+      toast({
+        title: "שגיאה",
+        description: "שגיאה בטעינת ההזמנות",
+        variant: "destructive",
+      })
+    } else {
+      setOrders(data || [])
     }
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    loadOrders()
   }, [])
 
   useEffect(() => {
-    fetchOrders()
-  }, [fetchOrders])
+    // Handle success/error messages
+    const success = searchParams.get("success")
+    const error = searchParams.get("error")
 
-  const filterOrders = useCallback(() => {
-    let filtered = [...orders]
-
-    if (statusFilter !== "all") {
-      filtered = filtered.filter((order) => order.status === statusFilter)
+    if (success === "deleted") {
+      toast({
+        title: "הצלחה",
+        description: "ההזמנה נמחקה בהצלחה",
+      })
+      // Clear the URL params
+      router.replace("/admin/orders")
     }
 
-    if (searchTerm) {
-      const lowercasedFilter = searchTerm.toLowerCase()
-      filtered = filtered.filter(
-        (order) =>
-          order.customer_name.toLowerCase().includes(lowercasedFilter) ||
-          order.phone.includes(searchTerm) ||
-          order.id.toLowerCase().includes(lowercasedFilter)
-      )
+    if (success === "bulk-deleted") {
+      const count = searchParams.get("count")
+      toast({
+        title: "הצלחה",
+        description: `${count} הזמנות נמחקו בהצלחה`,
+      })
+      router.replace("/admin/orders")
     }
 
-    setFilteredOrders(filtered)
-  }, [orders, statusFilter, searchTerm])
+    if (error === "delete-failed") {
+      toast({
+        title: "שגיאה",
+        description: "שגיאה במחיקת ההזמנה",
+        variant: "destructive",
+      })
+      router.replace("/admin/orders")
+    }
+  }, [searchParams, router, toast])
 
-  useEffect(() => {
-    filterOrders()
-  }, [orders, statusFilter, searchTerm, filterOrders])
-
-  const handleOrderUpdate = () => {
-    fetchOrders()
+  const handleSelectOrder = (orderId: string, checked: boolean) => {
+    const newSelected = new Set(selectedOrders)
+    if (checked) {
+      newSelected.add(orderId)
+    } else {
+      newSelected.delete(orderId)
+    }
+    setSelectedOrders(newSelected)
+    setSelectAll(newSelected.size === orders.length && orders.length > 0)
   }
 
-  const exportToExcel = () => {
-    const exportData = filteredOrders.map((order) => ({
-      "מזהה הזמנה": order.id,
-      "שם לקוח": order.customer_name,
-      טלפון: order.phone,
-      "אופן משלוח": order.delivery_option === "self_pickup" ? "איסוף עצמי" : "דואר ישראל",
-      "אמצעי תשלום": order.payment_method,
-      עיר: order.city || "",
-      רחוב: order.street || "",
-      "מספר בית": order.house_number || "",
-      מיקוד: order.zip_code || "",
-      "מחיר כולל": order.total_price,
-      סטטוס: statusLabels[order.status],
-      "תאריך יצירה": new Date(order.created_at).toLocaleDateString("he-IL"),
-      מוצרים: order.order_items.map((item) => `${item.products.name} (כמות: ${item.quantity})`).join(", "),
-    }))
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedOrders(new Set(orders.map((order) => order.id)))
+    } else {
+      setSelectedOrders(new Set())
+    }
+    setSelectAll(checked)
+  }
 
-    const ws = XLSX.utils.json_to_sheet(exportData)
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, "הזמנות")
-    XLSX.writeFile(wb, `הזמנות_${new Date().toISOString().split("T")[0]}.xlsx`)
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case "confirmed":
+        return <Badge variant="default">מאושרת</Badge>
+      case "rejected":
+        return <Badge variant="destructive">נדחתה</Badge>
+      default:
+        return <Badge variant="secondary">ממתינה</Badge>
+    }
+  }
+
+  const handleOrderUpdate = () => {
+    // Refresh orders after update
+    loadOrders()
+    // Clear selections
+    setSelectedOrders(new Set())
+    setSelectAll(false)
   }
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center">
-          <LoadingSpinner size={48} />
-          <p className="mt-4 text-lg">טוען הזמנות...</p>
-        </div>
+      <div className="container mx-auto py-8">
+        <div className="text-center">טוען הזמנות...</div>
       </div>
     )
   }
 
   return (
-    <div className="container mx-auto p-4 md:p-6">
-      <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
+    <div className="container mx-auto py-8">
+      <div className="flex justify-between items-center mb-6">
         <h1 className="text-3xl font-bold">ניהול הזמנות</h1>
-        <Button onClick={exportToExcel} disabled={filteredOrders.length === 0}>
-          <Download className="ml-2 h-4 w-4" />
-          ייצא לאקסל
-        </Button>
-      </div>
-
-      <div className="flex flex-col md:flex-row gap-4 mb-6">
-        <div className="relative flex-grow">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 h-5 w-5" />
-          <Input
-            placeholder="חפש לפי שם, טלפון או מזהה הזמנה..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="pr-10"
-          />
+        <div className="flex items-center gap-4">
+          <AdminNotifications />
+          <Button asChild variant="outline">
+            <Link href="/admin/settings">
+              <Settings className="h-4 w-4 mr-2" />
+              הגדרות
+            </Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/admin/products">ניהול מוצרים</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/admin/users">ניהול זמן אמת</Link>
+          </Button>
         </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-full md:w-48">
-            <SelectValue placeholder="סנן לפי סטטוס" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">כל הסטטוסים</SelectItem>
-            <SelectItem value="pending">ממתין</SelectItem>
-            <SelectItem value="confirmed">מאושר</SelectItem>
-            <SelectItem value="rejected">נדחה</SelectItem>
-            <SelectItem value="cancelled">בוטל</SelectItem>
-          </SelectContent>
-        </Select>
       </div>
 
-      {error && (
-        <Alert variant="destructive" className="mb-6">
-          <AlertCircle className="h-4 w-4" />
-          <AlertTitle>שגיאה</AlertTitle>
-          <AlertDescription>
-            {error}
-            <Button onClick={fetchOrders} variant="link" className="p-0 h-auto ml-2">
-              נסה שוב
-            </Button>
-          </AlertDescription>
-        </Alert>
+      {/* Bulk Actions */}
+      {selectedOrders.size > 0 && (
+        <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex items-center justify-between">
+            <span className="text-blue-700 font-medium">{selectedOrders.size} הזמנות נבחרו</span>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setSelectedOrders(new Set())
+                  setSelectAll(false)
+                }}
+              >
+                בטל בחירה
+              </Button>
+              <BulkDeleteButton selectedOrders={selectedOrders} onSuccess={handleOrderUpdate} />
+            </div>
+          </div>
+        </div>
       )}
 
-      <div className="space-y-4">
-        {filteredOrders.length === 0 && !loading ? (
-          <Card>
-            <CardContent className="p-6 text-center text-gray-500">
-              <p>לא נמצאו הזמנות התואמות לחיפוש.</p>
-            </CardContent>
-          </Card>
-        ) : (
-          filteredOrders.map((order) => (
-            <Card key={order.id} className="overflow-hidden">
-              <CardHeader>
-                <div className="flex justify-between items-start gap-4">
-                  <div>
-                    <CardTitle className="text-lg font-semibold">
-                      {order.customer_name} - ₪{order.total_price.toFixed(2)}
-                    </CardTitle>
-                    <p className="text-sm text-gray-600">
-                      {order.phone} • {new Date(order.created_at).toLocaleString("he-IL")}
-                    </p>
-                  </div>
-                  <Badge variant="outline" className={`${statusColors[order.status]} whitespace-nowrap`}>
-                    {statusLabels[order.status]}
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <p className="font-medium">פרטי משלוח ותשלום:</p>
-                    <p className="text-sm">
-                      <strong>אופן משלוח:</strong>{" "}
-                      {order.delivery_option === "self_pickup" ? "איסוף עצמי" : "דואר ישראל"}
-                    </p>
-                    {order.delivery_option === "israel_post" && order.city && (
-                      <p className="text-sm">
-                        <strong>כתובת:</strong> {order.street} {order.house_number}, {order.city}, {order.zip_code}
-                      </p>
-                    )}
-                    <p className="text-sm">
-                      <strong>אמצעי תשלום:</strong> {order.payment_method}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="font-medium">מוצרים:</p>
-                    <ul className="text-sm list-disc pr-4">
-                      {order.order_items.map((item) => (
-                        <li key={item.id}>
-                          {item.products.name} × {item.quantity} (₪{item.price_per_item.toFixed(2)} ליחידה)
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-
-                <div className="flex gap-2 flex-wrap items-center border-t pt-4 mt-4">
-                  <Link href={`/admin/orders/${order.id}`}>
-                    <Button variant="outline" size="sm">
-                      <Eye className="ml-1 h-4 w-4" />
-                      צפה בפרטים
+      <div className="border rounded-lg">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-12">
+                <Checkbox checked={selectAll} onCheckedChange={handleSelectAll} />
+              </TableHead>
+              <TableHead>תאריך</TableHead>
+              <TableHead>לקוח</TableHead>
+              <TableHead>משלוח</TableHead>
+              <TableHead>סה"כ</TableHead>
+              <TableHead>סטטוס</TableHead>
+              <TableHead>פעולות</TableHead>
+              <TableHead>פרטים</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {orders.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={8} className="text-center py-8">
+                  אין הזמנות להצגה
+                </TableCell>
+              </TableRow>
+            ) : (
+              orders.map((order) => (
+                <TableRow key={order.id}>
+                  <TableCell>
+                    <Checkbox
+                      checked={selectedOrders.has(order.id)}
+                      onCheckedChange={(checked) => handleSelectOrder(order.id, checked as boolean)}
+                    />
+                  </TableCell>
+                  <TableCell>{new Date(order.created_at).toLocaleDateString("he-IL")}</TableCell>
+                  <TableCell>{order.customer_name}</TableCell>
+                  <TableCell>{order.delivery_option === "israel_post" ? "דואר" : "איסוף"}</TableCell>
+                  <TableCell>₪{order.total_price}</TableCell>
+                  <TableCell>{getStatusBadge(order.status)}</TableCell>
+                  <TableCell>
+                    <div className="flex gap-2">
+                      {order.status === "pending" && (
+                        <>
+                          <ConfirmOrderButton orderId={order.id} onSuccess={handleOrderUpdate} />
+                          <RejectOrderButton orderId={order.id} onSuccess={handleOrderUpdate} />
+                        </>
+                      )}
+                      <DeleteOrderButton
+                        orderId={order.id}
+                        orderNumber={order.id.slice(-8)}
+                        onSuccess={handleOrderUpdate}
+                      />
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={`/admin/orders/${order.id}`}>פרטים</Link>
                     </Button>
-                  </Link>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
 
-                  {order.status !== "rejected" && order.id && (
-                    <EditOrderDialog order={order} onOrderUpdated={handleOrderUpdate} />
-                  )}
-
-                  {order.status === "pending" && order.id && (
-                    <>
-                      <ConfirmOrderButton orderId={order.id} onSuccess={handleOrderUpdate} />
-                      <RejectOrderButton orderId={order.id} onSuccess={handleOrderUpdate} />
-                    </>
-                  )}
-
-                  {order.id && (
-                    <CancelOrderButton orderId={order.id} orderStatus={order.status} onSuccess={handleOrderUpdate} />
-                  )}
-                  
-                  {order.id && (
-                    <DeleteOrderButton orderId={order.id} onSuccess={handleOrderUpdate} />
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          ))
-        )}
+      <div className="mt-4 text-sm text-gray-500">
+        סה"כ הזמנות: {orders.length} | נטען ב-{new Date().toLocaleTimeString("he-IL")}
       </div>
     </div>
   )
