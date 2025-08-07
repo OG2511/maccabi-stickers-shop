@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Check } from "lucide-react"
+import { Check } from 'lucide-react'
 
 interface ConfirmOrderButtonProps {
   orderId: string
@@ -13,9 +13,8 @@ export function ConfirmOrderButton({ orderId, onSuccess }: ConfirmOrderButtonPro
   const [isConfirming, setIsConfirming] = useState(false)
 
   const handleConfirm = async () => {
+    setIsConfirming(true)
     try {
-      setIsConfirming(true)
-
       const response = await fetch(`/api/admin/orders/confirm`, {
         method: "POST",
         headers: {
@@ -25,21 +24,19 @@ export function ConfirmOrderButton({ orderId, onSuccess }: ConfirmOrderButtonPro
       })
 
       if (!response.ok) {
-        const error = await response.text()
-        throw new Error(error)
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || "Failed to confirm order")
       }
 
       alert("ההזמנה אושרה בהצלחה")
 
-      if (onSuccess && typeof onSuccess === "function") {
+      if (onSuccess) {
         onSuccess()
       }
-
-      // Refresh the page
-      window.location.reload()
     } catch (error) {
       console.error("Error confirming order:", error)
-      alert("שגיאה באישור ההזמנה")
+      const errorMessage = error instanceof Error ? error.message : "Unknown error"
+      alert(`שגיאה באישור ההזמנה: ${errorMessage}`)
     } finally {
       setIsConfirming(false)
     }
@@ -47,8 +44,8 @@ export function ConfirmOrderButton({ orderId, onSuccess }: ConfirmOrderButtonPro
 
   return (
     <Button onClick={handleConfirm} variant="default" size="sm" disabled={isConfirming}>
-      <Check className="h-4 w-4" />
-      {isConfirming ? "מאשר..." : "אשר"}
+      <Check className="ml-2 h-4 w-4" />
+      {isConfirming ? "מאשר..." : "אשר הזמנה"}
     </Button>
   )
 }

@@ -51,3 +51,71 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
 }
+
+export async function POST(req: Request) {
+  const supabase = createClient();
+  const body = await req.json();
+
+  try {
+    const {
+      customer_name,
+      customer_phone,
+      payment_method,
+      delivery_method = "pickup",
+      city,
+      street,
+      house_number,
+      zip_code,
+      items,
+      total_amount,
+      session_id,
+    } = body;
+
+    if (!customer_name || !customer_phone || !payment_method || !items || !session_id) {
+      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    }
+
+    // Check stock availability
+    await validateOrderAgainstStock(items);
+
+    const { data: order, error: orderError } = await supabase
+      .from("orders")
+      .insert([{
+        customer_name,
+        customer_phone,
+        payment_method,
+        delivery_method,
+        city,
+        street,
+        house_number,
+        zip_code,
+        items,
+        total_amount,
+        session_id,
+        shipping_cost: delivery_method === "delivery" ? 15 : 0,
+        status: "pending",
+      }]);
+
+    if (orderError) throw orderError;
+
+    const order_id = order?.[0]?.id;
+    const orderItems = items.map((item: any) => ({
+      order_id,
+      product_id: item.product.id,
+      quantity: item.quantity,
+      price_per_item: item.product.price,
+      unit_price: item.product.price,
+      discounted_price: item.discounted_price,
+      total_price: item.total_price,
+      discount_percentage: item.discount_percentage || 0,
+    }));
+
+    const { error: orderItemsError } = await supabase.from("order_items").insert(orderItems);
+    if (orderItemsError) throw orderItemsError;
+
+    return NextResponse.json({ success: true });
+  } catch (err: any) {
+    console.error("Order creation error:", err);
+    return NextResponse.json({ error: err.message || "Internal error" }, { status: 500 });
+  }
+}

@@ -1,13 +1,13 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { LoadingSpinner } from "@/components/ui/loading-spinner"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
-import { Search, Download, Eye } from "lucide-react"
+import { Search, Download, Eye, AlertCircle } from 'lucide-react'
 import Link from "next/link"
 import { DeleteOrderButton } from "./delete-order-button"
 import { CancelOrderButton } from "./cancel-order-button"
@@ -15,6 +15,7 @@ import { ConfirmOrderButton } from "./confirm-order-button"
 import { RejectOrderButton } from "./reject-order-button"
 import { EditOrderDialog } from "./edit-order-dialog"
 import * as XLSX from "xlsx"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
 interface Product {
   id: string
@@ -48,14 +49,14 @@ interface Order {
   order_items: OrderItem[]
 }
 
-const statusColors = {
-  pending: "bg-yellow-100 text-yellow-800",
-  confirmed: "bg-green-100 text-green-800",
-  rejected: "bg-red-100 text-red-800",
-  cancelled: "bg-gray-100 text-gray-800",
+const statusColors: { [key: string]: string } = {
+  pending: "bg-yellow-100 text-yellow-800 border-yellow-200",
+  confirmed: "bg-green-100 text-green-800 border-green-200",
+  rejected: "bg-red-100 text-red-800 border-red-200",
+  cancelled: "bg-gray-100 text-gray-800 border-gray-200",
 }
 
-const statusLabels = {
+const statusLabels: { [key: string]: string } = {
   pending: "ממתין",
   confirmed: "מאושר",
   rejected: "נדחה",
@@ -70,66 +71,59 @@ export default function OrdersPage() {
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [searchTerm, setSearchTerm] = useState("")
 
-  useEffect(() => {
-    fetchOrders()
-  }, [])
-
-  useEffect(() => {
-    filterOrders()
-  }, [orders, statusFilter, searchTerm])
-
-  const fetchOrders = async () => {
+  const fetchOrders = useCallback(async () => {
     try {
       setLoading(true)
       setError(null)
 
-      // Set a cookie for development testing
-      if (process.env.NODE_ENV === "development") {
-        document.cookie = "admin_authenticated=true; path=/"
-      }
-
-      const response = await fetch("/api/admin/orders", {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: "include", // Important for cookies
-      })
+      const response = await fetch("/api/admin/orders")
 
       if (!response.ok) {
-        const errorData = await response.json()
+        const errorData = await response.json().catch(() => ({}))
         throw new Error(errorData.error || "Failed to fetch orders")
       }
 
       const data = await response.json()
       setOrders(data)
-    } catch (error) {
-      console.error("❌ Failed to fetch orders:", error)
-      setError(error instanceof Error ? error.message : "שגיאה בטעינת ההזמנות")
+    } catch (err) {
+      console.error("❌ Failed to fetch orders:", err)
+      const errorMessage = err instanceof Error ? err.message : "An unknown error occurred"
+      setError(`שגיאה בטעינת ההזמנות: ${errorMessage}`)
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
-  const filterOrders = () => {
-    let filtered = orders
+  useEffect(() => {
+    fetchOrders()
+  }, [fetchOrders])
 
-    // Filter by status
+  const filterOrders = useCallback(() => {
+    let filtered = [...orders]
+
     if (statusFilter !== "all") {
       filtered = filtered.filter((order) => order.status === statusFilter)
     }
 
-    // Filter by search term
     if (searchTerm) {
+      const lowercasedFilter = searchTerm.toLowerCase()
       filtered = filtered.filter(
         (order) =>
-          order.customer_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          order.customer_name.toLowerCase().includes(lowercasedFilter) ||
           order.phone.includes(searchTerm) ||
-          order.id.toLowerCase().includes(searchTerm.toLowerCase()),
+          order.id.toLowerCase().includes(lowercasedFilter)
       )
     }
 
     setFilteredOrders(filtered)
+  }, [orders, statusFilter, searchTerm])
+
+  useEffect(() => {
+    filterOrders()
+  }, [orders, statusFilter, searchTerm, filterOrders])
+
+  const handleOrderUpdate = () => {
+    fetchOrders()
   }
 
   const exportToExcel = () => {
@@ -146,77 +140,48 @@ export default function OrdersPage() {
       "מחיר כולל": order.total_price,
       סטטוס: statusLabels[order.status],
       "תאריך יצירה": new Date(order.created_at).toLocaleDateString("he-IL"),
-      מוצרים: order.order_items.map((item) => `${item.products.name} (${item.quantity})`).join(", "),
+      מוצרים: order.order_items.map((item) => `${item.products.name} (כמות: ${item.quantity})`).join(", "),
     }))
 
     const ws = XLSX.utils.json_to_sheet(exportData)
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, "הזמנות")
-
-    // Create blob and download
-    const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" })
-    const blob = new Blob([wbout], { type: "application/octet-stream" })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement("a")
-    link.href = url
-    link.download = `הזמנות_${new Date().toISOString().split("T")[0]}.xlsx`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
+    XLSX.writeFile(wb, `הזמנות_${new Date().toISOString().split("T")[0]}.xlsx`)
   }
 
   if (loading) {
     return (
-      <div className="container mx-auto p-6">
-        <div className="flex flex-col items-center justify-center h-64">
-          <LoadingSpinner className="mb-4" />
-          <p className="text-center">טוען הזמנות...</p>
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-center">
+          <LoadingSpinner size={48} />
+          <p className="mt-4 text-lg">טוען הזמנות...</p>
         </div>
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="container mx-auto p-6">
-        <Card>
-          <CardContent className="p-6">
-            <p className="text-red-600 text-center mb-4">{error}</p>
-            <Button onClick={fetchOrders} className="mx-auto block">
-              נסה שוב
-            </Button>
-          </CardContent>
-        </Card>
       </div>
     )
   }
 
   return (
-    <div className="container mx-auto p-6">
-      <div className="flex justify-between items-center mb-6">
+    <div className="container mx-auto p-4 md:p-6">
+      <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
         <h1 className="text-3xl font-bold">ניהול הזמנות</h1>
-        <Button onClick={exportToExcel} className="flex items-center gap-2">
-          <Download className="h-4 w-4" />
+        <Button onClick={exportToExcel} disabled={filteredOrders.length === 0}>
+          <Download className="ml-2 h-4 w-4" />
           ייצא לאקסל
         </Button>
       </div>
 
-      {/* Filters */}
-      <div className="flex gap-4 mb-6">
-        <div className="flex-1">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-            <Input
-              placeholder="חפש לפי שם, טלפון או מזהה הזמנה..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10"
-            />
-          </div>
+      <div className="flex flex-col md:flex-row gap-4 mb-6">
+        <div className="relative flex-grow">
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 h-5 w-5" />
+          <Input
+            placeholder="חפש לפי שם, טלפון או מזהה הזמנה..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="pr-10"
+          />
         </div>
         <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-48">
+          <SelectTrigger className="w-full md:w-48">
             <SelectValue placeholder="סנן לפי סטטוס" />
           </SelectTrigger>
           <SelectContent>
@@ -229,81 +194,99 @@ export default function OrdersPage() {
         </Select>
       </div>
 
-      {/* Orders List */}
+      {error && (
+        <Alert variant="destructive" className="mb-6">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>שגיאה</AlertTitle>
+          <AlertDescription>
+            {error}
+            <Button onClick={fetchOrders} variant="link" className="p-0 h-auto ml-2">
+              נסה שוב
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
       <div className="space-y-4">
-        {filteredOrders.length === 0 ? (
+        {filteredOrders.length === 0 && !loading ? (
           <Card>
-            <CardContent className="p-6 text-center">
-              <p className="text-gray-500">לא נמצאו הזמנות</p>
+            <CardContent className="p-6 text-center text-gray-500">
+              <p>לא נמצאו הזמנות התואמות לחיפוש.</p>
             </CardContent>
           </Card>
         ) : (
           filteredOrders.map((order) => (
-            <Card key={order.id}>
+            <Card key={order.id} className="overflow-hidden">
               <CardHeader>
-                <div className="flex justify-between items-start">
+                <div className="flex justify-between items-start gap-4">
                   <div>
-                    <CardTitle className="text-lg">
-                      {order.customer_name} - ₪{order.total_price}
+                    <CardTitle className="text-lg font-semibold">
+                      {order.customer_name} - ₪{order.total_price.toFixed(2)}
                     </CardTitle>
                     <p className="text-sm text-gray-600">
-                      {order.phone} • {new Date(order.created_at).toLocaleDateString("he-IL")}
+                      {order.phone} • {new Date(order.created_at).toLocaleString("he-IL")}
                     </p>
                   </div>
-                  <Badge className={statusColors[order.status]}>{statusLabels[order.status]}</Badge>
+                  <Badge variant="outline" className={`${statusColors[order.status]} whitespace-nowrap`}>
+                    {statusLabels[order.status]}
+                  </Badge>
                 </div>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                   <div>
+                    <p className="font-medium">פרטי משלוח ותשלום:</p>
                     <p className="text-sm">
                       <strong>אופן משלוח:</strong>{" "}
                       {order.delivery_option === "self_pickup" ? "איסוף עצמי" : "דואר ישראל"}
                     </p>
+                    {order.delivery_option === "israel_post" && order.city && (
+                      <p className="text-sm">
+                        <strong>כתובת:</strong> {order.street} {order.house_number}, {order.city}, {order.zip_code}
+                      </p>
+                    )}
                     <p className="text-sm">
                       <strong>אמצעי תשלום:</strong> {order.payment_method}
                     </p>
-                    {order.city && (
-                      <p className="text-sm">
-                        <strong>כתובת:</strong> {order.street} {order.house_number}, {order.city} {order.zip_code}
-                      </p>
-                    )}
                   </div>
                   <div>
-                    <p className="text-sm">
-                      <strong>מוצרים:</strong>
-                    </p>
-                    <ul className="text-sm text-gray-600">
+                    <p className="font-medium">מוצרים:</p>
+                    <ul className="text-sm list-disc pr-4">
                       {order.order_items.map((item) => (
                         <li key={item.id}>
-                          {item.products.name} × {item.quantity} (₪{item.price_per_item} כל אחד)
+                          {item.products.name} × {item.quantity} (₪{item.price_per_item.toFixed(2)} ליחידה)
                         </li>
                       ))}
                     </ul>
                   </div>
                 </div>
 
-                <div className="flex gap-2 flex-wrap">
+                <div className="flex gap-2 flex-wrap items-center border-t pt-4 mt-4">
                   <Link href={`/admin/orders/${order.id}`}>
                     <Button variant="outline" size="sm">
-                      <Eye className="h-4 w-4 mr-1" />
-                      צפה
+                      <Eye className="ml-1 h-4 w-4" />
+                      צפה בפרטים
                     </Button>
                   </Link>
 
-                  {/* Edit Order Button - Available for all orders except rejected */}
-                  {order.status !== "rejected" && <EditOrderDialog order={order} onOrderUpdated={fetchOrders} />}
+                  {order.status !== "rejected" && order.id && (
+                    <EditOrderDialog order={order} onOrderUpdated={handleOrderUpdate} />
+                  )}
 
-                  {order.status === "pending" && (
+                  {order.status === "pending" && order.id && (
                     <>
-                      <ConfirmOrderButton orderId={order.id} />
-                      <RejectOrderButton orderId={order.id} />
+                      <ConfirmOrderButton orderId={order.id} onSuccess={handleOrderUpdate} />
+                      <RejectOrderButton orderId={order.id} onSuccess={handleOrderUpdate} />
                     </>
                   )}
 
-                  <CancelOrderButton orderId={order.id} orderStatus={order.status} />
-
-                  <DeleteOrderButton orderId={order.id} />
+                  {order.id && (
+                    <CancelOrderButton orderId={order.id} orderStatus={order.status} onSuccess={handleOrderUpdate} />
+                  )}
+                  
+                  {order.id && (
+                    <DeleteOrderButton orderId={order.id} onSuccess={handleOrderUpdate} />
+                  )}
                 </div>
               </CardContent>
             </Card>

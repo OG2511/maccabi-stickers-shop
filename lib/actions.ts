@@ -113,25 +113,22 @@ export async function submitOrder(formData: FormData, cart: CartItem[], totalPri
       }
     }
 
-    // Check the actual column names in the orders table first
-    console.log("🔍 Checking orders table structure...")
-    
     const orderData = {
       customer_name: fullName,
-      customer_phone: phone, // Changed from 'phone' to 'customer_phone'
+      customer_phone: phone,
       delivery_option: deliveryOption as "self_pickup" | "israel_post",
       payment_method: paymentMethod as "bit" | "paypal" | "paybox",
       city: (formData.get("city") as string) || null,
       street: (formData.get("street") as string) || null,
       house_number: (formData.get("houseNumber") as string) || null,
       zip_code: (formData.get("zipCode") as string) || null,
-      total_price: totalPrice,
+      total_amount: totalPrice,
       status: "pending" as const,
     }
 
     console.log("🟢 Order data prepared:", {
       ...orderData,
-      customer_phone: orderData.customer_phone.substring(0, 3) + "***" // Hide phone for security
+      customer_phone: orderData.customer_phone.substring(0, 3) + "***"
     })
 
     // 1. Create the order
@@ -143,62 +140,6 @@ export async function submitOrder(formData: FormData, cart: CartItem[], totalPri
 
     if (orderError || !newOrder) {
       console.error("🔴 Supabase order error:", orderError)
-      
-      // If it's a column name issue, try with alternative column names
-      if (orderError?.message?.includes('customer_phone')) {
-        console.log("🔄 Trying with 'phone' column name...")
-        const alternativeOrderData = {
-          ...orderData,
-          phone: orderData.customer_phone,
-        }
-        delete alternativeOrderData.customer_phone
-        
-        const { data: newOrderAlt, error: orderErrorAlt } = await supabase
-          .from("orders")
-          .insert(alternativeOrderData)
-          .select()
-          .single()
-          
-        if (orderErrorAlt || !newOrderAlt) {
-          console.error("🔴 Alternative order creation failed:", orderErrorAlt)
-          return { success: false, error: "שגיאה ביצירת ההזמנה. אנא נסה שוב." }
-        }
-        
-        console.log("🟢 Order created with alternative structure, ID:", newOrderAlt.id)
-        // Continue with the alternative order
-        const finalOrder = newOrderAlt
-        
-        // 2. Create order items
-        const orderItems = cart.map((item) => ({
-          order_id: finalOrder.id,
-          product_id: item.product.id,
-          quantity: item.quantity,
-          price_per_item: item.product.price,
-        }))
-
-        const { error: itemsError } = await supabase.from("order_items").insert(orderItems)
-
-        if (itemsError) {
-          console.error("🔴 Supabase order items error:", itemsError)
-          // Try to delete the created order to avoid orphans
-          await supabase.from("orders").delete().match({ id: finalOrder.id })
-          return { success: false, error: "שגיאה בשמירת פריטי ההזמנה. אנא נסה שוב." }
-        }
-
-        console.log("🟢 Order items created successfully")
-        
-        // Continue with notifications...
-        await sendNotifications(finalOrder, orderData, userAgent, isMobile)
-        
-        console.log("✅ Order completed successfully")
-        revalidatePath("/admin/orders")
-
-        return {
-          success: true,
-          orderId: finalOrder.id,
-        }
-      }
-      
       return { success: false, error: "שגיאה ביצירת ההזמנה. אנא נסה שוב." }
     }
 
@@ -216,7 +157,6 @@ export async function submitOrder(formData: FormData, cart: CartItem[], totalPri
 
     if (itemsError) {
       console.error("🔴 Supabase order items error:", itemsError)
-      // Try to delete the created order to avoid orphans
       await supabase.from("orders").delete().match({ id: newOrder.id })
       return { success: false, error: "שגיאה בשמירת פריטי ההזמנה. אנא נסה שוב." }
     }
@@ -228,6 +168,7 @@ export async function submitOrder(formData: FormData, cart: CartItem[], totalPri
 
     console.log("✅ Order completed successfully")
     revalidatePath("/admin/orders")
+    revalidatePath("/shop")
 
     return {
       success: true,
@@ -243,179 +184,74 @@ export async function submitOrder(formData: FormData, cart: CartItem[], totalPri
   }
 }
 
-// Helper function for sending notifications
 async function sendNotifications(order: any, orderData: any, userAgent: string, isMobile: boolean) {
-  // 3. Send WhatsApp notification about new order with mobile retry
-  console.log("🔥 === NOTIFICATION DEBUG START ===")
-  console.log("📱 Attempting to send WhatsApp notification...")
-  console.log("📱 Environment check before sending:")
-  console.log("📱 ADMIN_WHATSAPP_NUMBER:", process.env.ADMIN_WHATSAPP_NUMBER || "❌ MISSING")
-  console.log("📱 CALLMEBOT_API_KEY:", process.env.CALLMEBOT_API_KEY || "❌ MISSING")
-  console.log("🔥 === NOTIFICATION DEBUG END ===")
-
-  // Fixed URL construction function
-  const getBaseUrl = () => {
-    // Always use the production URL for notifications
-    return "https://maccabistickers.vercel.app"
-  }
-
-  let notificationSuccess = false
-  const maxRetries = isMobile ? 3 : 1
-
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(`📱 Notification attempt ${attempt}/${maxRetries} (mobile: ${isMobile})`)
-
-      const baseUrl = getBaseUrl()
-      const notificationUrl = `${baseUrl}/api/whatsapp`
-
-      const notificationPayload = {
-        orderId: order.id,
-        customerName: orderData.customer_name,
-        totalPrice: orderData.total_price,
-        paymentMethod: orderData.payment_method,
-        phone: orderData.customer_phone || orderData.phone,
-        isMobile,
-        attempt,
-      }
-
-      console.log("📱 Notification payload:", {
-        orderId: order.id.slice(-8),
-        customerName: orderData.customer_name,
-        totalPrice: orderData.total_price,
-        paymentMethod: orderData.payment_method,
-        isMobile,
-        attempt,
-      })
-
-      const controller = new AbortController()
-      const timeoutId = setTimeout(
-        () => {
-          console.log(`⏰ Timeout reached for attempt ${attempt}`)
-          controller.abort()
-        },
-        isMobile ? 20000 : 15000,
-      )
-
-      const response = await fetch(notificationUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent": userAgent,
-        },
-        body: JSON.stringify(notificationPayload),
-        signal: controller.signal,
-      })
-
-      clearTimeout(timeoutId)
-
-      console.log(`📱 Attempt ${attempt} - Response status:`, response.status)
-
-      if (response.ok) {
-        console.log(`✅ WhatsApp notification sent successfully on attempt ${attempt}`)
-        notificationSuccess = true
-        break
-      } else {
-        console.error(`❌ Attempt ${attempt} failed:`, response.status, response.statusText)
-        if (attempt < maxRetries) {
-          const delay = 2000 * attempt
-          console.log(`⏳ Waiting ${delay}ms before retry...`)
-          await new Promise((resolve) => setTimeout(resolve, delay))
-        }
-      }
-    } catch (error) {
-      console.error(`❌ Attempt ${attempt} network error:`, {
-        name: error instanceof Error ? error.name : "Unknown",
-        message: error instanceof Error ? error.message : "Unknown error",
-      })
-
-      if (attempt < maxRetries) {
-        const delay = 2000 * attempt
-        console.log(`⏳ Waiting ${delay}ms before retry after error...`)
-        await new Promise((resolve) => setTimeout(resolve, delay))
-      }
+  console.log("🔥 === NOTIFICATION START ===")
+  const getBaseUrl = () => "https://maccabistickers.vercel.app"
+  
+  try {
+    const baseUrl = getBaseUrl()
+    const notificationUrl = `${baseUrl}/api/whatsapp`
+    const notificationPayload = {
+      orderId: order.id,
+      customerName: orderData.customer_name,
+      totalPrice: orderData.total_amount,
+      paymentMethod: orderData.payment_method,
+      phone: orderData.customer_phone,
+      isMobile,
     }
+    
+    await fetch(notificationUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": userAgent },
+      body: JSON.stringify(notificationPayload),
+    })
+    console.log("✅ WhatsApp notification sent")
+  } catch (error) {
+    console.error("❌ Failed to send WhatsApp notification:", error)
   }
-
-  if (!notificationSuccess) {
-    console.error("❌ All notification attempts failed")
-  }
-
-  // 4. Also send browser notification - but don't let it fail the order
+  
   try {
     const baseUrl = getBaseUrl()
     const browserNotificationUrl = `${baseUrl}/api/notifications`
-
-    const browserResponse = await fetch(browserNotificationUrl, {
+    await fetch(browserNotificationUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         orderId: order.id,
         customerName: orderData.customer_name,
-        totalPrice: orderData.total_price,
+        totalPrice: orderData.total_amount,
         paymentMethod: orderData.payment_method,
       }),
     })
-
-    if (browserResponse.ok) {
-      console.log("✅ Browser notification sent")
-    } else {
-      console.log("❌ Browser notification failed:", browserResponse.statusText)
-    }
+    console.log("✅ Browser notification sent")
   } catch (error) {
     console.error("❌ Failed to send browser notification:", error)
-    // Don't fail the order if notification fails
   }
+  console.log("🔥 === NOTIFICATION END ===")
 }
 
 export async function confirmOrder(orderId: string) {
   const supabase = getServerActionClient()
-
   try {
-    // 1. Fetch order items with current product stock
     const { data: items, error: itemsError } = await supabase
       .from("order_items")
       .select("quantity, products(id, stock)")
       .eq("order_id", orderId)
-
-    if (itemsError || !items) {
-      return { success: false, error: "Could not fetch order items." }
-    }
-
-    // 2. Validate stock availability before confirming
+    if (itemsError || !items) return { success: false, error: "Could not fetch order items." }
     for (const item of items) {
-      if (item.products) {
-        if (item.products.stock < item.quantity) {
-          return {
-            success: false,
-            error: `אין מספיק במלאי עבור מוצר ${item.products.id}. יש במלאי רק ${item.products.stock} יחידות.`,
-          }
-        }
+      if (item.products && item.products.stock < item.quantity) {
+        return { success: false, error: `אין מספיק במלאי עבור מוצר ${item.products.id}.` }
       }
     }
-
-    // 3. Update stock for each product
     for (const item of items) {
       if (item.products) {
         const newStock = item.products.stock - item.quantity
-        const { error: stockError } = await supabase
-          .from("products")
-          .update({ stock: newStock })
-          .eq("id", item.products.id)
-
-        if (stockError) {
-          return { success: false, error: `Failed to update stock for product ${item.products.id}` }
-        }
+        const { error: stockError } = await supabase.from("products").update({ stock: newStock }).eq("id", item.products.id)
+        if (stockError) return { success: false, error: `Failed to update stock for product ${item.products.id}` }
       }
     }
-
-    // 4. Update order status
     const { error: orderError } = await supabase.from("orders").update({ status: "confirmed" }).eq("id", orderId)
-
-    if (orderError) {
-      return { success: false, error: "Failed to update order status." }
-    }
-
+    if (orderError) return { success: false, error: "Failed to update order status." }
     revalidatePath("/admin/orders")
     revalidatePath("/shop")
     return { success: true }
@@ -426,18 +262,10 @@ export async function confirmOrder(orderId: string) {
 }
 
 export async function rejectOrder(orderId: string) {
-  console.log("🔴 Starting rejectOrder for ID:", orderId)
   const supabase = getServerActionClient()
-
   try {
     const { error } = await supabase.from("orders").update({ status: "rejected" }).eq("id", orderId)
-
-    if (error) {
-      console.error("🔴 Error rejecting order:", error)
-      return { success: false, error: "Failed to reject order" }
-    }
-
-    console.log("✅ Order rejected successfully")
+    if (error) return { success: false, error: "Failed to reject order" }
     revalidatePath("/admin/orders")
     return { success: true }
   } catch (error) {
